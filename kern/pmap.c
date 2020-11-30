@@ -12,6 +12,7 @@
 // These variables are set by i386_detect_memory()
 size_t npages;			// Amount of physical memory (in pages)
 static size_t npages_basemem;	// Amount of base memory (in pages)
+static uint8_t page_size_supported;
 
 // These variables are set in mem_init()
 pde_t *kern_pgdir;		// Kernel's initial page directory
@@ -137,7 +138,7 @@ mem_init(void)
 	//Code for getting the family Id of the processor.
 	//Can be used to identify if the PTE_PS flag support is avilable or not
 	uint32_t info=1, eax=1, ebx=0, ecx=0, edx=0;
-	uint8_t page_size_supported=0, family_id;
+	uint8_t family_id;
 	cpuid(info, &eax, &ebx, &ecx, &edx);
 	family_id = (eax >> 8) & 0xF;
 	page_size_supported = (family_id >= 6) ? 1 : 0;
@@ -214,7 +215,7 @@ mem_init(void)
 		boot_map_region(kern_pgdir, KERNBASE, (1LL<<32) - KERNBASE, 0, PTE_W|PTE_PS);
 	else
 		boot_map_region(kern_pgdir, KERNBASE, (1LL<<32) - KERNBASE, 0, PTE_W);
-	
+
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
 
@@ -408,6 +409,9 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 		pde = page2pa(page) + PTE_P + PTE_U + PTE_W;
 		pgdir[PDX(addr)] = pde;
 	}
+	if(pde & PTE_PS){
+		return &pgdir[PDX(addr)];
+	}
 	physaddr_t pgtable_pa = PTE_ADDR(pde);
 	pde_t *pgtable_va = KADDR(pgtable_pa);
 	return &pgtable_va[PTX(addr)];
@@ -433,6 +437,7 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 	assert(size%PGSIZE == 0);
 	assert(va%PGSIZE == 0);
 	assert(pa%PGSIZE == 0);
+	// cprintf("Mapping va: 0x%x - 0x%x to pa: 0x%x - 0x%x  size: 0x%x\n", va, va+size, pa, pa+size, size);
 	if(perm & PTE_PS){
 		for(int i=0; i < size/(NPTENTRIES*PGSIZE); i++){
 			pgdir[PDX(va+i*NPTENTRIES*PGSIZE)] = (pa+i*NPTENTRIES*PGSIZE) | perm | PTE_P;
@@ -443,7 +448,7 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 			pte_t* pte = pgdir_walk(pgdir, (void*)(va+i*PGSIZE), true);
 			assert(pte != NULL);
 			*pte = (pa + i*PGSIZE) | perm | PTE_P;
-		}	
+		}
 	}
 }
 
@@ -767,7 +772,7 @@ check_va2pa(pde_t *pgdir, uintptr_t va)
 		if (!(*pgdir & PTE_P))
 			return ~0;
 		return (physaddr_t)PGADDR(PDX(*pgdir),PTX(va),0);
-	}	
+	}
 	pgdir = &pgdir[PDX(va)];
 	if (!(*pgdir & PTE_P))
 		return ~0;
